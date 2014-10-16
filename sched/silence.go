@@ -5,28 +5,29 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/StackExchange/bosun/_third_party/github.com/StackExchange/scollector/opentsdb"
 	"github.com/StackExchange/bosun/expr"
 )
 
 type Silence struct {
-	Start, End  time.Time
-	Alert, Tags string
-	match       map[string]string
+	Start, End time.Time
+	Alert      expr.AlertKey
 }
 
-func (s *Silence) Silenced(now time.Time, alert string, tags opentsdb.TagSet) bool {
+func (s *Silence) Silenced(now time.Time, alert expr.AlertKey) bool {
 	if now.Before(s.Start) || now.After(s.End) {
 		return false
 	}
-	return s.Matches(alert, tags)
+	res := s.Matches(alert)
+	fmt.Println(alert, res)
+	return res
 }
 
-func (s *Silence) Matches(alert string, tags opentsdb.TagSet) bool {
+func (s *Silence) Matches(alert expr.AlertKey) bool {
 	if s.Alert != "" && s.Alert != alert {
 		return false
 	}
-	for k, pattern := range s.match {
+	tags := alert.Group()
+	for k, pattern := range s.Alert.Group() {
 		tagv, ok := tags[k]
 		if !ok {
 			return false
@@ -41,7 +42,7 @@ func (s *Silence) Matches(alert string, tags opentsdb.TagSet) bool {
 
 func (s Silence) ID() string {
 	h := sha1.New()
-	fmt.Fprintf(h, "%s%s%s{%s}", s.Start, s.End, s.Alert, s.Tags)
+	fmt.Fprintf(h, "%s|%s|%s", s.Start, s.End, s.Alert)
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
@@ -51,13 +52,12 @@ func (s *Schedule) Silenced() map[expr.AlertKey]time.Time {
 	aks := make(map[expr.AlertKey]time.Time)
 	now := time.Now()
 	s.Lock()
-	for _, si := range s.Silence {
-		for ak, st := range s.status {
-			if si.Silenced(now, ak.Name(), st.Group) {
+	for ak := range s.status {
+		for _, si := range s.Silence {
+			if si.Silenced(now, ak) {
 				if aks[ak].Before(si.End) {
 					aks[ak] = si.End
 				}
-				break
 			}
 		}
 	}
@@ -78,27 +78,14 @@ func (s *Schedule) AddSilence(start, end time.Time, alert, tagList string, confi
 	if alert == "" && tagList == "" {
 		return nil, fmt.Errorf("must specify either alert or tags")
 	}
+	ak, err := expr.ParseAlertKey(alert + "{" + tagList + "}")
+	if err != nil {
+		return nil, err
+	}
 	si := &Silence{
 		Start: start,
 		End:   end,
-		Alert: alert,
-		match: make(map[string]string),
-	}
-	if tagList != "" {
-		tags, err := opentsdb.ParseTags(tagList)
-		if err != nil {
-			return nil, err
-		} else if len(tags) == 0 {
-			return nil, fmt.Errorf("empty text")
-		}
-		si.Tags = tagList
-		for k, v := range tags {
-			_, err := Match(v, "")
-			if err != nil {
-				return nil, err
-			}
-			si.match[k] = v
-		}
+		Alert: ak,
 	}
 	s.Lock()
 	defer s.Unlock()
@@ -109,8 +96,8 @@ func (s *Schedule) AddSilence(start, end time.Time, alert, tagList string, confi
 		return nil, nil
 	}
 	aks := make(map[expr.AlertKey]bool)
-	for ak, st := range s.status {
-		if si.Matches(ak.Name(), st.Group) {
+	for ak := range s.status {
+		if si.Matches(ak) {
 			aks[ak] = s.status[ak].IsActive()
 		}
 	}
