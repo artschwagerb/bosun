@@ -211,8 +211,9 @@ bosunControllers.controller('BosunCtrl', ['$scope', '$route', '$http', '$q', '$r
                 short.value = data.id;
                 $rootScope.shortlink = true;
                 setTimeout(function () {
-                    short.setSelectionRange(0, data.id.length);
-                });
+                    short.selectionStart = 0;
+                    short.selectionEnd = data.id.length;
+                }, 10);
             }
         });
     };
